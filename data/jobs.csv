@@ -1,0 +1,4 @@
+date_found,title,company,source,salary,score,claude_compatibility,category,reason,url
+2026-06-05,Senior Technical Writer,Acme Remote,test,$70k-$90k/yr,8.5,88.0,writing,Almost entirely async writing tasks Claude Code can handle.,https://example.com/job/1
+2026-06-05,Technical Writer,Acme,test,$70k,8.5,88.0,writing,Fully async writing.,https://ex.com/1
+2026-06-05,Backend Developer,Beta Inc,test,$100k,9.0,75.0,development,"Coding tasks high compat, PRs need human review.",https://ex.com/2

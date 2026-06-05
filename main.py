@@ -53,6 +53,9 @@ def cmd_run(_args):
     path = digest.generate(_today())
     logger.info("Digest written to %s", path)
 
+    csv_path = db.export_csv()
+    logger.info("CSV updated at %s", csv_path)
+
 
 def cmd_scrape(_args):
     db.init_db()

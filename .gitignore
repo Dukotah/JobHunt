@@ -1,5 +1,5 @@
 __pycache__/
 *.pyc
 *.pyo
-data/jobs.db
+# data/jobs.db is committed by CI so results persist across runs
 .env

@@ -1,0 +1,41 @@
+name: Daily Job Hunt
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # 07:00 UTC daily
+  workflow_dispatch:       # manual trigger from GitHub UI
+
+permissions:
+  contents: write          # needed to commit the digest back
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python main.py run
+
+      - name: Commit results
+        run: |
+          git config user.name  "JobHunt Bot"
+          git config user.email "actions@github.com"
+          git add reports/ data/jobs.db data/jobs.csv
+          git diff --cached --quiet && echo "Nothing new to commit" || \
+            git commit -m "chore: job digest $(date -u +%Y-%m-%d)"
+          git push

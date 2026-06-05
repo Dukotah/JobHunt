@@ -1,3 +1,4 @@
+import csv
 import sqlite3
 from pathlib import Path
 
@@ -54,6 +55,26 @@ def url_exists(url: str) -> bool:
     with get_conn() as conn:
         row = conn.execute("SELECT 1 FROM jobs WHERE url = ?", (url,)).fetchone()
     return row is not None
+
+
+def export_csv(path: Path | None = None) -> Path:
+    """Export all scored jobs to data/jobs.csv for easy browsing."""
+    if path is None:
+        path = Path(__file__).parent / "data" / "jobs.csv"
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT date_found, title, company, source, salary,
+                   score, claude_compatibility, category, reason, url
+            FROM jobs
+            WHERE score IS NOT NULL
+            ORDER BY date_found DESC, claude_compatibility DESC
+        """).fetchall()
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["date_found", "title", "company", "source", "salary",
+                         "score", "claude_compatibility", "category", "reason", "url"])
+        writer.writerows(rows)
+    return path
 
 
 def get_top_jobs(date: str, limit: int = 10) -> list[dict]:
