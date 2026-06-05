@@ -1,10 +1,14 @@
 """Job scraper — pulls listings from sources with reliable public APIs/RSS.
 
 Sources:
-  - Remote OK  (JSON API, no auth)
-  - Arbeitnow  (JSON API, no auth)
-  - Jobicy     (RSS feed)
-  - Working Nomads (RSS feed)
+  - Remote OK       (JSON API, no auth, ~300 listings w/ salary)
+  - Arbeitnow       (JSON API, no auth, remote-filtered)
+  - The Muse        (JSON API, no auth, large US company coverage)
+  - Himalayas       (RSS, remote-only curated board)
+  - Jobicy          (RSS, remote-only)
+  - Working Nomads  (RSS, curated remote listings)
+  - Remotive        (RSS, large remote board)
+  - We Work Remotely (RSS, uses lxml for malformed XML tolerance)
 """
 
 import re
@@ -28,6 +32,20 @@ HEADERS = {
 }
 
 REQUEST_TIMEOUT = 10  # seconds
+
+RSS_FEEDS = {
+    "remotive":      "https://remotive.com/remote-jobs/feed/",
+    "himalayas":     "https://himalayas.app/jobs/rss",
+    "jobicy":        "https://jobicy.com/?feed=job_feed",
+    "workingnomads": "https://www.workingnomads.com/feed",
+    "wwr":           "https://weworkremotely.com/remote-jobs.rss",
+}
+
+# US location keywords — used for soft US filtering
+_US_RE = re.compile(
+    r"\busa?\b|united states|u\.s\.|north america|americas?\b",
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +89,7 @@ def _extract_salary(text: str) -> str:
     return m.group(0) if m else ""
 
 
-def _job(title, company, source, url, description="", salary="") -> dict:
+def _job(title, company, source, url, description="", salary="", location="") -> dict:
     combined = f"{title} {description} {salary}"
     return {
         "title": _clean(title),
@@ -80,6 +98,7 @@ def _job(title, company, source, url, description="", salary="") -> dict:
         "url": url,
         "salary": salary or _extract_salary(combined),
         "description": _clean(description)[:3000],
+        "location": _clean(location),
         "score": None,
         "claude_compatibility": None,
         "category": None,
@@ -90,15 +109,14 @@ def _job(title, company, source, url, description="", salary="") -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Remote OK  — JSON API, no auth, ~300 listings
+# Remote OK  — JSON API
 # ---------------------------------------------------------------------------
 
 def _scrape_remoteok() -> Iterator[dict]:
     data = _get("https://remoteok.com/api", as_json=True)
     if not data:
         return
-    # First element is a notice object, skip it
-    for item in data[1:]:
+    for item in data[1:]:  # first element is a notice object
         if not isinstance(item, dict):
             continue
         url = item.get("url", "")
@@ -107,57 +125,98 @@ def _scrape_remoteok() -> Iterator[dict]:
         title = item.get("position", "")
         company = item.get("company", "")
         description = item.get("description", "") or ""
+        location = item.get("location", "") or ""
         salary = ""
-        lo = item.get("salary_min")
-        hi = item.get("salary_max")
+        lo, hi = item.get("salary_min"), item.get("salary_max")
         if lo and hi:
             salary = f"${int(lo):,}–${int(hi):,}/yr"
         elif lo:
             salary = f"${int(lo):,}/yr"
         if not title or not url:
             continue
-        yield _job(title, company, "remoteok", url, description, salary)
+        yield _job(title, company, "remoteok", url, description, salary, location)
 
 
 # ---------------------------------------------------------------------------
-# Arbeitnow  — JSON API, no auth, remote+English filter
+# Arbeitnow  — JSON API, remote-filtered
 # ---------------------------------------------------------------------------
 
 def _scrape_arbeitnow() -> Iterator[dict]:
-    url = "https://arbeitnow.com/api/job-board-api"
-    data = _get(url, as_json=True)
-    if not data:
-        return
-    for item in data.get("data", []):
-        if not item.get("remote", False):
-            continue
-        job_url = item.get("url", "")
-        title = item.get("title", "")
-        company = item.get("company_name", "")
-        description = item.get("description", "") or ""
-        salary = ""
-        # Arbeitnow sometimes includes salary in description
-        sal_match = _extract_salary(description)
-        if sal_match:
-            salary = sal_match
-        if not title or not job_url:
-            continue
-        yield _job(title, company, "arbeitnow", job_url, description, salary)
+    for page in range(1, 4):   # pages 1–3 ≈ 300 listings
+        data = _get(f"https://arbeitnow.com/api/job-board-api?page={page}", as_json=True)
+        if not data:
+            break
+        items = data.get("data", [])
+        if not items:
+            break
+        for item in items:
+            if not item.get("remote", False):
+                continue
+            job_url = item.get("url", "")
+            title = item.get("title", "")
+            company = item.get("company_name", "")
+            description = item.get("description", "") or ""
+            location = item.get("location", "") or ""
+            salary = _extract_salary(description)
+            if not title or not job_url:
+                continue
+            yield _job(title, company, "arbeitnow", job_url, description, salary, location)
 
 
 # ---------------------------------------------------------------------------
-# Jobicy  — RSS feed
+# The Muse  — JSON API, no auth, massive US company coverage
+# ---------------------------------------------------------------------------
+
+def _scrape_themuse() -> Iterator[dict]:
+    for page in range(1, 6):   # pages 1–5 ≈ 500 listings
+        data = _get(
+            f"https://www.themuse.com/api/public/jobs?page={page}&level=Senior+Level"
+            f"&level=Mid+Level&level=Entry+Level&descending=true",
+            as_json=True,
+        )
+        if not data:
+            break
+        results = data.get("results", [])
+        if not results:
+            break
+        for item in results:
+            locations = item.get("locations", [])
+            # Include remote or US-based
+            loc_names = " ".join(l.get("name", "") for l in locations)
+            is_remote = any("remote" in l.get("name", "").lower() for l in locations)
+            is_us = bool(_US_RE.search(loc_names)) or is_remote
+            if not is_us:
+                continue
+            job_url = item.get("refs", {}).get("landing_page", "")
+            title = item.get("name", "")
+            company = item.get("company", {}).get("name", "")
+            description = _clean(item.get("contents", "") or "")
+            if not title or not job_url:
+                continue
+            yield _job(title, company, "themuse", job_url, description, "", loc_names)
+
+
+# ---------------------------------------------------------------------------
+# RSS feeds  — shared parser with lxml fallback for malformed XML
 # ---------------------------------------------------------------------------
 
 def _scrape_rss(source_name: str, feed_url: str) -> Iterator[dict]:
     resp = _get(feed_url)
     if resp is None:
         return
+
+    # Try strict stdlib parser first, fall back to lxml's permissive HTML parser
+    root = None
     try:
         root = ET.fromstring(resp.content)
-    except ET.ParseError as exc:
-        logger.warning("XML parse error for %s: %s", feed_url, exc)
-        return
+    except ET.ParseError:
+        try:
+            soup = BeautifulSoup(resp.content, "lxml-xml")
+            # Re-serialise through lxml then re-parse — gives us a clean tree
+            root = ET.fromstring(str(soup).encode())
+        except Exception as exc:
+            logger.warning("RSS parse failed for %s: %s", feed_url, exc)
+            return
 
     ns = {"atom": "http://www.w3.org/2005/Atom"}
     items = root.findall(".//item") or root.findall(".//atom:entry", ns)
@@ -170,9 +229,15 @@ def _scrape_rss(source_name: str, feed_url: str) -> Iterator[dict]:
         title = _clean(_t("title"))
         url = _clean(_t("link") or _t("guid"))
         description = _clean(_t("description") or _t("summary"))
+
+        # WWR encodes "Company: Title"
+        company = ""
+        if source_name == "wwr" and ": " in title:
+            company, title = title.split(": ", 1)
+
         if not title or not url:
             continue
-        yield _job(title, "", source_name, url, description)
+        yield _job(title, company, source_name, url, description)
 
 
 # ---------------------------------------------------------------------------
@@ -187,20 +252,21 @@ def scrape_all() -> list[dict]:
     logger.info("  → %d listings", len(batch))
     jobs.extend(batch)
 
-    logger.info("API: Arbeitnow")
+    logger.info("API: Arbeitnow (3 pages)")
     batch = list(_scrape_arbeitnow())
     logger.info("  → %d listings", len(batch))
     jobs.extend(batch)
 
-    logger.info("RSS: Jobicy")
-    batch = list(_scrape_rss("jobicy", "https://jobicy.com/?feed=job_feed"))
+    logger.info("API: The Muse (5 pages, US/remote)")
+    batch = list(_scrape_themuse())
     logger.info("  → %d listings", len(batch))
     jobs.extend(batch)
 
-    logger.info("RSS: Working Nomads")
-    batch = list(_scrape_rss("workingnomads", "https://www.workingnomads.com/feed"))
-    logger.info("  → %d listings", len(batch))
-    jobs.extend(batch)
+    for source, url in RSS_FEEDS.items():
+        logger.info("RSS: %s", source)
+        batch = list(_scrape_rss(source, url))
+        logger.info("  → %d listings", len(batch))
+        jobs.extend(batch)
 
     # Deduplicate by URL
     seen: set[str] = set()

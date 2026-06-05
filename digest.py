@@ -6,6 +6,7 @@ from pathlib import Path
 import db
 
 REPORTS_DIR = Path(__file__).parent / "reports"
+DIGEST_LIMIT = 50
 
 
 def _compat_bar(score: float) -> str:
@@ -17,7 +18,7 @@ def generate(date: str | None = None) -> Path:
     if date is None:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    jobs = db.get_top_jobs(date, limit=10)
+    jobs = db.get_top_jobs(date, limit=DIGEST_LIMIT)
 
     REPORTS_DIR.mkdir(exist_ok=True)
     report_path = REPORTS_DIR / f"digest-{date}.md"
@@ -35,10 +36,16 @@ def generate(date: str | None = None) -> Path:
         lines.append("_No jobs found for this date._")
     else:
         for i, job in enumerate(jobs, 1):
-            salary = f" · {job['salary']}" if job.get("salary") else ""
+            meta = [f"_{job['source']}_"]
+            if job.get("location"):
+                meta.append(job["location"])
+            if job.get("salary"):
+                meta.append(job["salary"])
+            meta_str = " · ".join(meta)
+
             lines += [
                 f"## {i}. {job['title']}",
-                f"**{job['company'] or 'Unknown'}** · _{job['source']}_{salary}",
+                f"**{job['company'] or 'Unknown'}** · {meta_str}",
                 "",
                 f"**Claude Compatibility:** {_compat_bar(job['claude_compatibility'] or 0)}",
                 f"**General Score:** {job['score'] or 0:.1f}/10",

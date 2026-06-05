@@ -21,6 +21,7 @@ def init_db():
                 source TEXT,
                 url TEXT UNIQUE NOT NULL,
                 salary TEXT,
+                location TEXT,
                 description TEXT,
                 score REAL,
                 claude_compatibility REAL,
@@ -30,6 +31,11 @@ def init_db():
                 status TEXT DEFAULT 'new'
             )
         """)
+        # Add location column to existing DBs that predate this schema
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN location TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.commit()
 
 
@@ -39,10 +45,10 @@ def insert_job(job: dict) -> bool:
         with get_conn() as conn:
             conn.execute("""
                 INSERT INTO jobs
-                    (title, company, source, url, salary, description,
+                    (title, company, source, url, salary, location, description,
                      score, claude_compatibility, category, reason, date_found, status)
                 VALUES
-                    (:title, :company, :source, :url, :salary, :description,
+                    (:title, :company, :source, :url, :salary, :location, :description,
                      :score, :claude_compatibility, :category, :reason, :date_found, :status)
             """, job)
             conn.commit()
@@ -63,7 +69,7 @@ def export_csv(path: Path | None = None) -> Path:
         path = Path(__file__).parent / "data" / "jobs.csv"
     with get_conn() as conn:
         rows = conn.execute("""
-            SELECT date_found, title, company, source, salary,
+            SELECT date_found, title, company, source, location, salary,
                    score, claude_compatibility, category, reason, url
             FROM jobs
             WHERE score IS NOT NULL
@@ -71,13 +77,13 @@ def export_csv(path: Path | None = None) -> Path:
         """).fetchall()
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["date_found", "title", "company", "source", "salary",
-                         "score", "claude_compatibility", "category", "reason", "url"])
+        writer.writerow(["date_found", "title", "company", "source", "location",
+                         "salary", "score", "claude_compatibility", "category", "reason", "url"])
         writer.writerows(rows)
     return path
 
 
-def get_top_jobs(date: str, limit: int = 10) -> list[dict]:
+def get_top_jobs(date: str, limit: int = 50) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute("""
             SELECT * FROM jobs
