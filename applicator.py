@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright, Page, TimeoutError as PWTimeout
 
 import db
+import tailor as tailor_mod
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -120,6 +121,9 @@ def _human_delay(lo: float = 0.5, hi: float = 1.5):
 
 
 def _build_cover_letter(profile: dict, job: dict) -> str:
+    # Use pre-generated tailored cover letter if available
+    if profile.get("_cover_letter"):
+        return profile["_cover_letter"]
     template = profile.get("cover_letter_template", "")
     return template.format(
         title=job.get("title", "this role"),
@@ -324,6 +328,16 @@ def apply_to_job(page: Page, job: dict, profile: dict, dry_run: bool) -> str:
         "[%s] %s @ %s  (compat=%.0f%%)",
         form_type.upper(), job["title"], job["company"], job.get("claude_compatibility") or 0
     )
+
+    # Generate a tailored resume + cover letter for this specific job
+    try:
+        tailored_files = tailor_mod.tailor_job(job)
+        # Override resume path with the tailored PDF
+        profile = {**profile, "resume_path": tailored_files["resume_pdf"]}
+        # Pre-fill cover letter with tailored version
+        profile["_cover_letter"] = tailored_files["cover_text"]
+    except Exception as exc:
+        logger.warning("  Tailoring failed, using default resume: %s", exc)
 
     try:
         result = handler(page, job, profile, dry_run)
