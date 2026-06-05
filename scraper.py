@@ -22,7 +22,7 @@ HEADERS = {
     "Accept": "application/rss+xml, application/xml, text/xml, */*",
 }
 
-REQUEST_TIMEOUT = 20  # seconds
+REQUEST_TIMEOUT = 10  # seconds
 
 RSS_SOURCES = {
     "weworkremotely": [
