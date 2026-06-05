@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: claude/dazzling-cerf-wISoB
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,8 +29,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run pipeline
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python main.py run
 
       - name: Commit results
@@ -38,4 +38,5 @@ jobs:
           git add reports/ data/jobs.db data/jobs.csv
           git diff --cached --quiet && echo "Nothing new to commit" || \
             git commit -m "chore: job digest $(date -u +%Y-%m-%d)"
-          git push
+          git pull --rebase origin claude/dazzling-cerf-wISoB
+          git push origin claude/dazzling-cerf-wISoB

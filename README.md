@@ -54,12 +54,12 @@ python main.py schedule
 
 ## Sources
 
-| Source | Method | Categories |
-|--------|--------|------------|
-| We Work Remotely | RSS | Programming, Copywriting, Marketing, Support, Management, Product, DevOps, Design |
-| Remotive | RSS | All remote |
-| Remote.co | HTML | Writing, Developer, PM, VA, Data Entry, Analyst |
-| Jobspresso | HTML | All remote |
+| Source | Method | Notes |
+|--------|--------|-------|
+| Remote OK | JSON API | ~300 listings, salary data included |
+| Arbeitnow | JSON API | Remote-filtered, English listings |
+| Jobicy | RSS | Remote-only board |
+| Working Nomads | RSS | Curated remote listings |
 
 ---
 
