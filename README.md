@@ -54,12 +54,24 @@ python main.py schedule
 
 ## Sources
 
-| Source | Method | Notes |
-|--------|--------|-------|
-| Remote OK | JSON API | ~300 listings, salary data included |
-| Arbeitnow | JSON API | Remote-filtered, English listings |
-| Jobicy | RSS | Remote-only board |
-| Working Nomads | RSS | Curated remote listings |
+No API keys required. All sources are free and public.
+
+| Source | Type | Volume |
+|--------|------|--------|
+| **Greenhouse ATS** | JSON API | 80+ remote-friendly companies (Notion, Stripe, Figma, GitLab, Zapier…) |
+| **Lever ATS** | JSON API | 60+ remote-friendly companies (Anthropic, Deel, Remote, Toptal…) |
+| **Remote OK** | JSON API | ~300 listings/day with salary data |
+| **Arbeitnow** | JSON API | ~300 remote listings/day |
+| **The Muse** | JSON API | ~500 US/remote listings/day |
+| **Remotive** | RSS | Large curated remote board |
+| **We Work Remotely** | RSS | Popular remote-only board |
+| **Himalayas** | RSS | Curated remote-only |
+| **Jobicy** | RSS | Remote-only |
+| **Working Nomads** | RSS | Curated remote listings |
+
+**How Greenhouse/Lever work:** Both are ATS platforms used by hundreds of companies.
+Their job board APIs are fully public — no auth, no rate limits, one call per company.
+Adding a company to the list = instant access to all their open roles every day.
 
 ---
 

@@ -1,14 +1,16 @@
-"""Job scraper — pulls listings from sources with reliable public APIs/RSS.
+"""Job scraper — pulls listings from multiple free sources, no API keys needed.
 
 Sources:
-  - Remote OK       (JSON API, no auth, ~300 listings w/ salary)
-  - Arbeitnow       (JSON API, no auth, remote-filtered)
-  - The Muse        (JSON API, no auth, large US company coverage)
-  - Himalayas       (RSS, remote-only curated board)
-  - Jobicy          (RSS, remote-only)
-  - Working Nomads  (RSS, curated remote listings)
-  - Remotive        (RSS, large remote board)
-  - We Work Remotely (RSS, uses lxml for malformed XML tolerance)
+  - Greenhouse ATS   (public JSON API — 80+ remote-friendly companies)
+  - Lever ATS        (public JSON API — 60+ remote-friendly companies)
+  - Remote OK        (public JSON API, ~300 listings w/ salary)
+  - Arbeitnow        (public JSON API, remote-filtered)
+  - The Muse         (public JSON API, large US company coverage)
+  - Himalayas        (RSS, remote-only curated board)
+  - Remotive         (RSS, large remote board)
+  - We Work Remotely (RSS, lxml fallback for malformed XML)
+  - Jobicy           (RSS, remote-only)
+  - Working Nomads   (RSS, curated remote listings)
 """
 
 import re
@@ -33,6 +35,63 @@ HEADERS = {
 
 REQUEST_TIMEOUT = 10  # seconds
 
+# ---------------------------------------------------------------------------
+# Greenhouse — public API, no auth
+# boards-api.greenhouse.io/v1/boards/{slug}/jobs
+# ---------------------------------------------------------------------------
+
+GREENHOUSE_COMPANIES = [
+    # Dev tools / infra
+    "vercel", "supabase", "planetscale", "render", "railway", "fly",
+    "netlify", "cloudflare", "fastly", "elastic", "mongodb", "redis",
+    "hashicorp", "datadog", "newrelic", "pagerduty", "segment",
+    "mixpanel", "amplitude", "heap", "fullstory",
+    # SaaS / product
+    "notion", "airtable", "loom", "linear", "figma", "miro",
+    "zapier", "monday", "intercom", "zendesk", "freshworks",
+    "hubspot", "drift", "outreach", "salesloft", "gong",
+    "brex", "ramp", "rippling", "gusto", "lattice", "culture-amp",
+    "greenhouse", "lever", "workday",
+    # Media / content / writing
+    "substack", "medium", "buzzfeed", "vox", "axios",
+    # E-commerce / marketplace
+    "shopify", "gumroad", "stripe", "square", "braintree",
+    "affirm", "klarna", "marqeta",
+    # Health / edtech
+    "calm", "headspace", "noom", "hims", "ro",
+    "duolingo", "coursera", "udemy", "masterclass",
+    # Remote-first companies
+    "gitlab", "automattic", "invision", "doist", "basecamp",
+    "buffer", "helpscout", "hotjar", "close", "convertkit",
+]
+
+# ---------------------------------------------------------------------------
+# Lever — public API, no auth
+# api.lever.co/v0/postings/{slug}?mode=json
+# ---------------------------------------------------------------------------
+
+LEVER_COMPANIES = [
+    # Dev tools / infra
+    "anthropic", "openai", "scale", "weights-biases", "huggingface",
+    "replit", "codeium", "cursor", "anyscale", "modal",
+    "turso", "neon", "xata", "upstash",
+    # SaaS
+    "asana", "carta", "doordash", "lyft", "robinhood",
+    "plaid", "chime", "coinbase", "gemini", "alchemy",
+    "postman", "retool", "airplane", "superblocks", "tooljet",
+    "clerk", "auth0", "stytch", "workos",
+    # Marketing / content
+    "semrush", "ahrefs", "clearscope", "marketmuse", "jasper",
+    "copy-ai", "writesonic",
+    # Remote-first
+    "remote", "deel", "oyster", "papaya-global", "justworks",
+    "toptal", "andela", "turing",
+    # Agency / services
+    "thoughtworks", "slalom", "ideo",
+    # Media
+    "buzzsprout", "anchor", "transistor",
+]
+
 RSS_FEEDS = {
     "remotive":      "https://remotive.com/remote-jobs/feed/",
     "himalayas":     "https://himalayas.app/jobs/rss",
@@ -41,9 +100,10 @@ RSS_FEEDS = {
     "wwr":           "https://weworkremotely.com/remote-jobs.rss",
 }
 
-# US location keywords — used for soft US filtering
-_US_RE = re.compile(
-    r"\busa?\b|united states|u\.s\.|north america|americas?\b",
+_REMOTE_RE = re.compile(r"\bremote\b|\banywhere\b|\bwfh\b", re.IGNORECASE)
+_US_RE = re.compile(r"\busa?\b|\bunited states\b|\bu\.s\.\b|\bnorth america\b", re.IGNORECASE)
+_SALARY_RE = re.compile(
+    r"\$[\d,]+(?:k)?(?:\s*[-–]\s*\$[\d,]+(?:k)?)?(?:\s*/\s*(?:yr|year|mo|month|hr|hour))?",
     re.IGNORECASE,
 )
 
@@ -71,17 +131,11 @@ def _get(url: str, as_json: bool = False):
         resp.raise_for_status()
         return resp.json() if as_json else resp
     except requests.RequestException as exc:
-        logger.warning("Fetch failed for %s: %s", url, exc)
+        logger.warning("Fetch failed %s: %s", url, exc)
         return None
     except json.JSONDecodeError as exc:
-        logger.warning("JSON parse error for %s: %s", url, exc)
+        logger.warning("JSON error %s: %s", url, exc)
         return None
-
-
-_SALARY_RE = re.compile(
-    r"\$[\d,]+(?:k)?(?:\s*[-–]\s*\$[\d,]+(?:k)?)?(?:\s*/\s*(?:yr|year|mo|month|hr|hour))?",
-    re.IGNORECASE,
-)
 
 
 def _extract_salary(text: str) -> str:
@@ -89,16 +143,19 @@ def _extract_salary(text: str) -> str:
     return m.group(0) if m else ""
 
 
+def _is_remote(location: str, description: str = "") -> bool:
+    return bool(_REMOTE_RE.search(location) or _REMOTE_RE.search(description[:500]))
+
+
 def _job(title, company, source, url, description="", salary="", location="") -> dict:
-    combined = f"{title} {description} {salary}"
     return {
         "title": _clean(title),
         "company": _clean(company),
         "source": source,
         "url": url,
-        "salary": salary or _extract_salary(combined),
-        "description": _clean(description)[:3000],
+        "salary": salary or _extract_salary(f"{title} {description}"),
         "location": _clean(location),
+        "description": _clean(description)[:3000],
         "score": None,
         "claude_compatibility": None,
         "category": None,
@@ -109,14 +166,82 @@ def _job(title, company, source, url, description="", salary="", location="") ->
 
 
 # ---------------------------------------------------------------------------
-# Remote OK  — JSON API
+# Greenhouse
+# ---------------------------------------------------------------------------
+
+def _scrape_greenhouse(slug: str) -> Iterator[dict]:
+    url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+    data = _get(url, as_json=True)
+    if not data:
+        return
+    for item in data.get("jobs", []):
+        location = item.get("location", {}).get("name", "")
+        if not _is_remote(location, item.get("content", "") or ""):
+            continue
+        job_url = item.get("absolute_url", "")
+        title = item.get("title", "")
+        description = _clean(item.get("content", "") or "")
+        if not title or not job_url:
+            continue
+        yield _job(title, slug.replace("-", " ").title(), f"greenhouse/{slug}", job_url, description, "", location)
+
+
+def _scrape_all_greenhouse() -> Iterator[dict]:
+    for slug in GREENHOUSE_COMPANIES:
+        try:
+            yield from _scrape_greenhouse(slug)
+        except Exception as exc:
+            logger.warning("Greenhouse %s: %s", slug, exc)
+
+
+# ---------------------------------------------------------------------------
+# Lever
+# ---------------------------------------------------------------------------
+
+def _scrape_lever(slug: str) -> Iterator[dict]:
+    url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
+    data = _get(url, as_json=True)
+    if not data or not isinstance(data, list):
+        return
+    for item in data:
+        categories = item.get("categories", {})
+        location = categories.get("location", "") or item.get("workplaceType", "")
+        commitment = categories.get("commitment", "")
+        # Skip clearly non-remote unless it says remote
+        if not _is_remote(location, commitment):
+            # Check the text field for "remote"
+            text = item.get("text", "") or ""
+            if not _is_remote(text, ""):
+                continue
+        job_url = item.get("hostedUrl", "")
+        title = item.get("text", "")
+        description = _clean(
+            (item.get("description", "") or "") +
+            " ".join(s.get("content", "") for s in item.get("lists", []))
+        )
+        company_name = slug.replace("-", " ").title()
+        if not title or not job_url:
+            continue
+        yield _job(title, company_name, f"lever/{slug}", job_url, description, "", location)
+
+
+def _scrape_all_lever() -> Iterator[dict]:
+    for slug in LEVER_COMPANIES:
+        try:
+            yield from _scrape_lever(slug)
+        except Exception as exc:
+            logger.warning("Lever %s: %s", slug, exc)
+
+
+# ---------------------------------------------------------------------------
+# Remote OK
 # ---------------------------------------------------------------------------
 
 def _scrape_remoteok() -> Iterator[dict]:
     data = _get("https://remoteok.com/api", as_json=True)
     if not data:
         return
-    for item in data[1:]:  # first element is a notice object
+    for item in data[1:]:
         if not isinstance(item, dict):
             continue
         url = item.get("url", "")
@@ -125,7 +250,7 @@ def _scrape_remoteok() -> Iterator[dict]:
         title = item.get("position", "")
         company = item.get("company", "")
         description = item.get("description", "") or ""
-        location = item.get("location", "") or ""
+        location = item.get("location", "") or "Remote"
         salary = ""
         lo, hi = item.get("salary_min"), item.get("salary_max")
         if lo and hi:
@@ -138,11 +263,11 @@ def _scrape_remoteok() -> Iterator[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Arbeitnow  — JSON API, remote-filtered
+# Arbeitnow
 # ---------------------------------------------------------------------------
 
 def _scrape_arbeitnow() -> Iterator[dict]:
-    for page in range(1, 4):   # pages 1–3 ≈ 300 listings
+    for page in range(1, 4):
         data = _get(f"https://arbeitnow.com/api/job-board-api?page={page}", as_json=True)
         if not data:
             break
@@ -156,22 +281,20 @@ def _scrape_arbeitnow() -> Iterator[dict]:
             title = item.get("title", "")
             company = item.get("company_name", "")
             description = item.get("description", "") or ""
-            location = item.get("location", "") or ""
-            salary = _extract_salary(description)
+            location = item.get("location", "") or "Remote"
             if not title or not job_url:
                 continue
-            yield _job(title, company, "arbeitnow", job_url, description, salary, location)
+            yield _job(title, company, "arbeitnow", job_url, description, _extract_salary(description), location)
 
 
 # ---------------------------------------------------------------------------
-# The Muse  — JSON API, no auth, massive US company coverage
+# The Muse
 # ---------------------------------------------------------------------------
 
 def _scrape_themuse() -> Iterator[dict]:
-    for page in range(1, 6):   # pages 1–5 ≈ 500 listings
+    for page in range(1, 6):
         data = _get(
-            f"https://www.themuse.com/api/public/jobs?page={page}&level=Senior+Level"
-            f"&level=Mid+Level&level=Entry+Level&descending=true",
+            f"https://www.themuse.com/api/public/jobs?page={page}&descending=true",
             as_json=True,
         )
         if not data:
@@ -181,11 +304,8 @@ def _scrape_themuse() -> Iterator[dict]:
             break
         for item in results:
             locations = item.get("locations", [])
-            # Include remote or US-based
-            loc_names = " ".join(l.get("name", "") for l in locations)
-            is_remote = any("remote" in l.get("name", "").lower() for l in locations)
-            is_us = bool(_US_RE.search(loc_names)) or is_remote
-            if not is_us:
+            loc_names = " | ".join(l.get("name", "") for l in locations)
+            if not _is_remote(loc_names) and not _US_RE.search(loc_names):
                 continue
             job_url = item.get("refs", {}).get("landing_page", "")
             title = item.get("name", "")
@@ -197,7 +317,7 @@ def _scrape_themuse() -> Iterator[dict]:
 
 
 # ---------------------------------------------------------------------------
-# RSS feeds  — shared parser with lxml fallback for malformed XML
+# RSS feeds (shared parser w/ lxml fallback)
 # ---------------------------------------------------------------------------
 
 def _scrape_rss(source_name: str, feed_url: str) -> Iterator[dict]:
@@ -205,17 +325,15 @@ def _scrape_rss(source_name: str, feed_url: str) -> Iterator[dict]:
     if resp is None:
         return
 
-    # Try strict stdlib parser first, fall back to lxml's permissive HTML parser
     root = None
     try:
         root = ET.fromstring(resp.content)
     except ET.ParseError:
         try:
             soup = BeautifulSoup(resp.content, "lxml-xml")
-            # Re-serialise through lxml then re-parse — gives us a clean tree
             root = ET.fromstring(str(soup).encode())
         except Exception as exc:
-            logger.warning("RSS parse failed for %s: %s", feed_url, exc)
+            logger.warning("RSS parse failed %s: %s", feed_url, exc)
             return
 
     ns = {"atom": "http://www.w3.org/2005/Atom"}
@@ -230,7 +348,6 @@ def _scrape_rss(source_name: str, feed_url: str) -> Iterator[dict]:
         url = _clean(_t("link") or _t("guid"))
         description = _clean(_t("description") or _t("summary"))
 
-        # WWR encodes "Company: Title"
         company = ""
         if source_name == "wwr" and ": " in title:
             company, title = title.split(": ", 1)
@@ -241,11 +358,21 @@ def _scrape_rss(source_name: str, feed_url: str) -> Iterator[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def scrape_all() -> list[dict]:
     jobs: list[dict] = []
+
+    logger.info("ATS: Greenhouse (%d companies)", len(GREENHOUSE_COMPANIES))
+    batch = list(_scrape_all_greenhouse())
+    logger.info("  → %d remote listings", len(batch))
+    jobs.extend(batch)
+
+    logger.info("ATS: Lever (%d companies)", len(LEVER_COMPANIES))
+    batch = list(_scrape_all_lever())
+    logger.info("  → %d remote listings", len(batch))
+    jobs.extend(batch)
 
     logger.info("API: Remote OK")
     batch = list(_scrape_remoteok())
@@ -257,7 +384,7 @@ def scrape_all() -> list[dict]:
     logger.info("  → %d listings", len(batch))
     jobs.extend(batch)
 
-    logger.info("API: The Muse (5 pages, US/remote)")
+    logger.info("API: The Muse (5 pages)")
     batch = list(_scrape_themuse())
     logger.info("  → %d listings", len(batch))
     jobs.extend(batch)
