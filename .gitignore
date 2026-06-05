@@ -3,3 +3,5 @@ __pycache__/
 *.pyo
 # data/jobs.db is committed by CI so results persist across runs
 .env
+data/browser_profile/
+profile.json

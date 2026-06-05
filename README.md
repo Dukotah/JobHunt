@@ -1,65 +1,96 @@
 # JobHunt — Remote Job Automation Pipeline
 
-Finds remote jobs where Claude Code can handle most of the actual work.
-Scrapes 4 sources, scores with Claude AI on two axes, stores in SQLite,
-and generates a daily markdown digest + CSV.
+Finds remote jobs, scores them by Claude Code compatibility, and **automatically applies** using browser automation. No API keys required.
 
 ---
 
-## Quickstart (GitHub Actions — recommended)
+## How it works
 
-The pipeline runs automatically via GitHub Actions. No local server needed.
-
-### 1. Add your API key as a repository secret
-
-Go to **Settings → Secrets and variables → Actions → New repository secret**:
-
-- Name: `ANTHROPIC_API_KEY`
-- Value: your Anthropic API key
-
-### 2. Trigger a run
-
-- **Automatic:** runs every day at 07:00 UTC
-- **Manual:** go to **Actions → Daily Job Hunt → Run workflow**
-
-### 3. View results
-
-After each run, the bot commits back to the repo:
-- `reports/digest-YYYY-MM-DD.md` — top 10 jobs of the day
-- `data/jobs.csv` — all scored jobs, spreadsheet-friendly
-- `data/jobs.db` — full SQLite database
-
----
-
-## Local Usage
-
-```bash
-pip install -r requirements.txt
-export ANTHROPIC_API_KEY=your_key_here
-
-# Full pipeline: scrape → score → save → digest + CSV
-python main.py run
-
-# Individual steps
-python main.py scrape       # fetch and store new listings (unscored)
-python main.py score        # score any unscored jobs in the database
-python main.py digest       # regenerate today's digest from DB
-python main.py digest --date 2025-06-01
-
-# Daemon mode (runs daily at 07:00 UTC, Ctrl+C to stop)
-python main.py schedule
+```
+GitHub Actions (daily, free)          Your machine (on demand)
+─────────────────────────────         ──────────────────────────────
+Scrape 800-1800 job listings    →     Read top-scored jobs from DB
+Score by Claude compatibility         Open real browser (Playwright)
+Save to SQLite + CSV            →     Auto-fill Greenhouse/Lever/Indeed
+Commit digest back to repo            Submit applications
+                                      Mark applied in DB
 ```
 
 ---
 
-## Sources
+## Part 1 — Scraping (GitHub Actions, runs daily)
 
-No API keys required. All sources are free and public.
+### Setup
+
+1. Push this repo to GitHub
+2. Go to **Actions → Daily Job Hunt → Run workflow** to trigger the first run
+3. After ~5 min, check your repo for `reports/digest-YYYY-MM-DD.md` and `data/jobs.csv`
+
+The scraper runs automatically every day at 07:00 UTC. No secrets or API keys needed.
+
+---
+
+## Part 2 — Auto-applying (your local machine)
+
+### Setup
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+playwright install chromium
+
+# Pull the latest job data from GitHub
+git pull
+
+# Fill in your details
+cp profile.json my_profile.json   # edit with your name, email, resume path, etc.
+```
+
+Edit `profile.json` with your:
+- Name, email, phone
+- Path to your resume PDF
+- LinkedIn / GitHub URLs
+- Cover letter template
+- Standard answers to common questions
+
+### First run — log into job sites
+
+```bash
+python applicator.py --dry-run
+```
+
+This opens a real Chrome window. **Log into Indeed** (and any other sites you want) while it's open. Your session is saved to `data/browser_profile/` and reused on every future run.
+
+### Apply to jobs
+
+```bash
+# Apply to top 30 jobs (compat >= 60%) — shows browser, asks before submitting
+python applicator.py
+
+# Apply to more jobs
+python applicator.py --limit 50 --min-compat 50
+
+# Greenhouse and Lever only (most reliable, no CAPTCHA)
+python applicator.py --source greenhouse
+python applicator.py --source lever
+
+# Preview without submitting
+python applicator.py --dry-run
+
+# Run in background (no browser window)
+python applicator.py --headless
+```
+
+After each run, check `needs_review` jobs — these are ones where the form had unusual questions or the submit button wasn't found. Open them manually.
+
+---
+
+## Sources (all free, no API keys)
 
 | Source | Type | Volume |
 |--------|------|--------|
-| **Greenhouse ATS** | JSON API | 80+ remote-friendly companies (Notion, Stripe, Figma, GitLab, Zapier…) |
-| **Lever ATS** | JSON API | 60+ remote-friendly companies (Anthropic, Deel, Remote, Toptal…) |
+| **Greenhouse ATS** | JSON API | 80+ companies: Notion, Figma, Stripe, GitLab, Zapier, Buffer… |
+| **Lever ATS** | JSON API | 60+ companies: Anthropic, Deel, Toptal, Postman, Retool… |
 | **Remote OK** | JSON API | ~300 listings/day with salary data |
 | **Arbeitnow** | JSON API | ~300 remote listings/day |
 | **The Muse** | JSON API | ~500 US/remote listings/day |
@@ -69,56 +100,67 @@ No API keys required. All sources are free and public.
 | **Jobicy** | RSS | Remote-only |
 | **Working Nomads** | RSS | Curated remote listings |
 
-**How Greenhouse/Lever work:** Both are ATS platforms used by hundreds of companies.
-Their job board APIs are fully public — no auth, no rate limits, one call per company.
-Adding a company to the list = instant access to all their open roles every day.
+**Expected total: 800–1,800 unique remote listings per daily run.**
 
 ---
 
 ## Scoring
 
-Each listing is evaluated by **Claude Haiku** (~$0.001/listing) on two axes:
+Each listing is scored on two axes by a keyword heuristic engine:
 
-**General Score (0–10):** Async-friendliness, output-based work, $50k+ pay, fit with web dev / PM / ops background.
-
-**Claude Compatibility (0–100%):** Estimated % of daily tasks Claude Code could realistically handle.
+**Claude Compatibility (0–100%):** How much of the daily work could Claude Code handle?
 
 | Range | Meaning |
 |-------|---------|
 | 80–100% | Async writing, coding, research, data, docs, no-code automation |
-| 50–79% | Mix of async + some real-time coordination |
-| 20–49% | Significant human judgment or relationship management required |
-| 0–19% | Physical presence, real-time calls, or live supervision required |
+| 50–79% | Mix of async + some live coordination |
+| 20–49% | Significant human judgment or relationship management |
+| 0–19% | Live calls, physical presence, real-time supervision |
+
+**General Score (0–10):** Remote/async signals, salary ($50k+), background fit (web dev, PM, ops, agency).
 
 ---
 
-## Database Schema
-
-`data/jobs.db` — SQLite, committed by CI after each run.
-
-```
-id, title, company, source, url, salary, description,
-score, claude_compatibility, category, reason, date_found, status
-```
-
-`data/jobs.csv` — same data minus description, spreadsheet-friendly.
-
----
-
-## File Structure
+## File structure
 
 ```
 JobHunt/
-├── .github/workflows/daily_hunt.yml   # GitHub Actions pipeline
+├── .github/workflows/daily_hunt.yml  # GitHub Actions pipeline
 ├── data/
-│   ├── jobs.db                        # SQLite database
-│   └── jobs.csv                       # CSV export
+│   ├── jobs.db                        # SQLite — all jobs + status
+│   ├── jobs.csv                       # CSV export for spreadsheet browsing
+│   └── browser_profile/               # Saved browser login sessions (gitignored)
 ├── reports/
-│   └── digest-YYYY-MM-DD.md          # Daily top-10 digests
-├── scraper.py     # RSS + HTML scrapers
-├── scorer.py      # Claude AI scoring
-├── db.py          # SQLite helpers
-├── digest.py      # Markdown report generator
-├── main.py        # CLI entrypoint
+│   └── digest-YYYY-MM-DD.md          # Daily top-50 digest
+├── scraper.py      # All scrapers (Greenhouse, Lever, RSS, JSON APIs)
+├── scorer.py       # Heuristic scoring engine
+├── applicator.py   # Playwright auto-applicator
+├── db.py           # SQLite helpers
+├── digest.py       # Markdown report generator
+├── main.py         # CLI: run / scrape / score / digest
+├── profile.json    # Your personal info + cover letter template
 └── requirements.txt
+```
+
+---
+
+## Adding more companies
+
+To add a company to the Greenhouse or Lever scrapers, find their slug (the part of their job board URL after `greenhouse.io/` or `lever.co/`) and add it to the list in `scraper.py`:
+
+```python
+GREENHOUSE_COMPANIES = [
+    ...,
+    "notion",        # boards.greenhouse.io/notion
+    "yourcompany",   # boards.greenhouse.io/yourcompany
+]
+```
+
+---
+
+## Cron (optional local schedule)
+
+```cron
+# Pull fresh data from GitHub and apply every morning at 8am
+0 8 * * * cd /path/to/JobHunt && git pull && python applicator.py --limit 30
 ```
